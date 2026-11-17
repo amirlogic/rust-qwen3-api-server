@@ -9,25 +9,33 @@
 //! at startup.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use ndarray::{Array0, Array2, ArrayD, Axis, IxDyn};
 use ort::{session::Session, value::{Tensor, TensorElementType, ValueType}};
 use tokenizers::Tokenizer;
+use tokio::sync::Semaphore;
 use tracing::{debug, info, instrument};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public interface
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Shared state inside the Arc. Public so server.rs can reach the semaphore.
+pub struct EngineShared {
+    /// std::sync::Mutex is fine here: it is only ever locked from inside a
+    /// spawn_blocking thread, never from an async context.
+    pub inner: std::sync::Mutex<EngineInner>,
+    /// Limits concurrent inference to 1. The server acquires a permit *before*
+    /// calling spawn_blocking so the async task yields while waiting instead of
+    /// blocking a thread-pool thread.
+    pub semaphore: Arc<Semaphore>,
+}
+
 /// A loaded, thread-safe inference engine.
 #[derive(Clone)]
-pub struct Engine(Arc<Mutex<EngineInner>>);
+pub struct Engine(pub Arc<EngineShared>);
 
 impl Engine {
     /// Load model + tokenizer from `model_dir`.
@@ -75,27 +83,20 @@ impl Engine {
             "ONNX session interface"
         );
 
-        Ok(Self(Arc::new(Mutex::new(EngineInner {
-            session,
-            tokenizer,
-            eos_token_id,
-            cache_layout,
-            default_max_tokens,
-        }))))
-    }
-
-    /// Generate a response for a chat conversation.
-    pub fn generate(
-        &self,
-        messages: &[crate::server::ChatMessage],
-        max_tokens: usize,
-    ) -> anyhow::Result<GenerateResult> {
-        let mut inner = self.0.lock().map_err(|_| anyhow::anyhow!("Engine mutex poisoned"))?;
-        inner.generate(messages, max_tokens)
+        Ok(Self(Arc::new(EngineShared {
+            inner: std::sync::Mutex::new(EngineInner {
+                session,
+                tokenizer,
+                eos_token_id,
+                cache_layout,
+                default_max_tokens,
+            }),
+            semaphore: Arc::new(Semaphore::new(1)),
+        })))
     }
 
     pub fn default_max_tokens(&self) -> usize {
-        self.0.lock().map(|i| i.default_max_tokens).unwrap_or(512)
+        self.0.inner.lock().map(|i| i.default_max_tokens).unwrap_or(512)
     }
 }
 
@@ -176,17 +177,17 @@ fn discover_cache_layout(session: &Session) -> anyhow::Result<CacheLayout> {
 // Inner engine
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct EngineInner {
+pub struct EngineInner {
     session: Session,
     tokenizer: Tokenizer,
     eos_token_id: u32,
     cache_layout: CacheLayout,
-    default_max_tokens: usize,
+    pub default_max_tokens: usize,
 }
 
 impl EngineInner {
     #[instrument(skip(self, messages), fields(max_tokens))]
-    fn generate(
+    pub fn generate(
         &mut self,
         messages: &[crate::server::ChatMessage],
         max_tokens: usize,
@@ -543,6 +544,3 @@ fn build_chat_prompt(messages: &[crate::server::ChatMessage]) -> String {
     prompt.push_str("<|im_start|>assistant\n<think>\n\n</think>\n\n");
     prompt
 }
-
-
-

@@ -13,8 +13,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tower_http::cors::CorsLayer;
-use tracing::{error, info, instrument};
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tracing::{error, info};
 
 use crate::inference::Engine;
 
@@ -63,6 +63,7 @@ pub async fn run(host: String, port: u16, engine: Engine) -> anyhow::Result<()> 
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .layer(CorsLayer::permissive())
+        .layer(TraceLayer::new_for_http())
         .with_state(state);
 
     let addr = format!("{host}:{port}");
@@ -98,7 +99,6 @@ async fn list_models() -> Json<Value> {
     }))
 }
 
-#[instrument(skip(state, request), fields(max_tokens))]
 async fn chat_completions(
     State(state): State<AppState>,
     Json(request): Json<ChatCompletionRequest>,
@@ -144,11 +144,41 @@ async fn chat_completions(
 
     info!(id = %id, max_tokens, "Starting inference");
 
-    // Run inference on a blocking thread so we don't stall the async runtime
+    // Acquire the semaphore permit *before* spawn_blocking.
+    //
+    // This is the key fix: when a second request arrives while inference is
+    // already running, the async task yields here (freeing its thread back to
+    // the runtime) rather than blocking a spawn_blocking thread-pool thread
+    // while holding nothing. Without this, every waiting request consumed a
+    // thread-pool slot doing nothing, which could exhaust the pool and prevent
+    // the in-flight inference from ever completing — causing the caller to
+    // receive an empty or dropped response.
+    let permit = match Arc::clone(&state.engine.0.semaphore).acquire_owned().await {
+        Ok(p) => p,
+        Err(_) => {
+            error!("Inference semaphore closed");
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "Server is shutting down.");
+        }
+    };
+
+    // Run inference on a blocking thread so we don't stall the async runtime.
+    // The permit is moved into the closure and dropped only after generate()
+    // returns, keeping the semaphore held for the full duration of inference.
     let engine = state.engine.clone();
     let messages = request.messages.clone();
     let inference_started = std::time::Instant::now();
-    let result = tokio::task::spawn_blocking(move || engine.generate(&messages, max_tokens)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        // Hold the permit for the lifetime of this blocking call.
+        let _permit = permit;
+        let mut inner = engine
+            .0
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Engine mutex poisoned"))?;
+        inner.generate(&messages, max_tokens)
+    })
+    .await;
+
     info!(
         id = %id,
         elapsed_ms = inference_started.elapsed().as_millis() as u64,
@@ -227,4 +257,3 @@ fn unix_secs() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
-
