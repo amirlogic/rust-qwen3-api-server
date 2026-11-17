@@ -1,6 +1,6 @@
-# LFM3 API Server
+# Qwen3 API Server
 
-An OpenAI-compatible HTTP API server that runs the **LFM3-1.7B** model locally using the **ONNX Runtime** via [`pykeio/ort`](https://github.com/pykeio/ort). Built with [Axum](https://github.com/tokio-rs/axum). Command-line interface only (no GUI required).
+An OpenAI-compatible HTTP API server that runs the **Qwen3-1.7B** model locally using the **ONNX Runtime** via [`pykeio/ort`](https://github.com/pykeio/ort). Built with [Axum](https://github.com/tokio-rs/axum). Command-line interface only (no GUI required).
 
 ---
 
@@ -12,10 +12,10 @@ Download the ONNX model from Hugging Face before running:
 # Install huggingface-cli
 pip install huggingface_hub[cli]
 
-# Download the Q4 ONNX model (~1 GB)
-huggingface-cli download onnx-community/LFM3-1.7B-ONNX \
+# Download the Q4 ONNX model (~2.15 GB)
+huggingface-cli download onnx-community/Qwen3-1.7B-ONNX \
   --include "config.json" "generation_config.json" "tokenizer.json" "tokenizer_config.json" \
-              "onnx/model_q4.onnx" "onnx/model_q4.onnx_data" \
+              "onnx/model_q4.onnx" \
   --local-dir ./model
 ```
 
@@ -29,7 +29,6 @@ model/
   tokenizer_config.json
   onnx/
     model_q4.onnx
-    model_q4.onnx_data
 ```
 
 ---
@@ -44,8 +43,8 @@ cargo build --release
 ```
 
 - **Output executable:**
-  - Windows: `target\release\lfm3-server.exe`
-  - Linux / macOS: `target/release/lfm3-server`
+  - Windows: `target\release\qwen3-server.exe`
+  - Linux / macOS: `target/release/qwen3-server`
 
 ### Development / Debug Build
 For fast compilation during development:
@@ -55,8 +54,8 @@ cargo build
 ```
 
 - **Output executable:**
-  - Windows: `target\debug\lfm3-server.exe`
-  - Linux / macOS: `target/debug/lfm3-server`
+  - Windows: `target\debug\qwen3-server.exe`
+  - Linux / macOS: `target/debug/qwen3-server`
 
 > [!NOTE]
 > `ort` uses **load-dynamic** and does not bundle or download the ONNX Runtime shared library. Download the official ONNX Runtime package for your platform and architecture from the [ONNX Runtime releases](https://github.com/microsoft/onnxruntime/releases). The library must be compatible with ONNX Runtime API 31 (ONNX Runtime 1.31 or newer).
@@ -76,7 +75,7 @@ cargo build
 > Keep this PowerShell window open and launch the server from it so the environment variable is available:
 >
 > ```powershell
-> .\target\release\lfm3-server.exe --model-dir .\model
+> .\target\release\qwen3-server.exe --model-dir .\model
 > ```
 >
 > Change the ZIP filename to match the version you downloaded. Ensure the DLL is the official ONNX Runtime library and exports `OrtGetApiBase`; unrelated DLLs with the same filename will fail to load.
@@ -89,39 +88,39 @@ cargo build
 
 ```powershell
 # Windows PowerShell
-.\target\release\lfm3-server.exe --model-dir ./model --port 8080
+.\target\release\qwen3-server.exe --model-dir ./model --port 8080
 
 # Linux / macOS
-./target/release/lfm3-server --model-dir ./model --port 8080
+./target/release/qwen3-server --model-dir ./model --port 8080
 ```
 
 ### Using Environment Variables
 
 ```powershell
 # Windows PowerShell
-$env:LFM3_MODEL_DIR = "./model"
-$env:LFM3_PORT = "8080"
-.\target\release\lfm3-server.exe
+$env:QWEN3_MODEL_DIR = "./model"
+$env:QWEN3_PORT = "8080"
+.\target\release\qwen3-server.exe
 
 # Bash
-export LFM3_MODEL_DIR="./model"
-export LFM3_PORT=8080
-./target/release/lfm3-server
+export QWEN3_MODEL_DIR="./model"
+export QWEN3_PORT=8080
+./target/release/qwen3-server
 ```
 
 ### CLI Options
 
 View all available options:
 ```powershell
-.\target\release\lfm3-server.exe --help
+.\target\release\qwen3-server.exe --help
 ```
 
 | Flag | Env Var | Default | Description |
 |---|---|---|---|
-| `-p`, `--port` | `LFM3_PORT` | `8080` | Port to listen on |
-| `--host` | `LFM3_HOST` | `127.0.0.1` | Host address to bind |
-| `-m`, `--model-dir` | `LFM3_MODEL_DIR` | *(Required)* | Path to directory containing model and tokenizer files |
-| `--max-tokens` | `LFM3_MAX_TOKENS` | `512` | Default maximum tokens generated per completion |
+| `-p`, `--port` | `QWEN3_PORT` | `8080` | Port to listen on |
+| `--host` | `QWEN3_HOST` | `127.0.0.1` | Host address to bind |
+| `-m`, `--model-dir` | `QWEN3_MODEL_DIR` | *(Required)* | Path to directory containing model and tokenizer files |
+| `--max-tokens` | `QWEN3_MAX_TOKENS` | `512` | Default maximum tokens generated per completion |
 | `-h`, `--help` | — | — | Print help information |
 | `-V`, `--version` | — | — | Print version |
 
@@ -136,7 +135,7 @@ GET /health
 **Response:**
 ```json
 {
-  "model": "lfm3",
+  "model": "qwen3-1.7b",
   "status": "ok"
 }
 ```
@@ -152,7 +151,7 @@ GET /v1/models
   "data": [
     {
       "created": 0,
-      "id": "lfm3",
+      "id": "qwen3-1.7b",
       "object": "model",
       "owned_by": "local"
     }
@@ -166,7 +165,7 @@ POST /v1/chat/completions
 Content-Type: application/json
 
 {
-  "model": "lfm3",
+  "model": "qwen3-1.7b",
   "messages": [
     { "role": "system", "content": "You are a helpful assistant." },
     { "role": "user",   "content": "What is the capital of France?" }
@@ -181,7 +180,7 @@ Content-Type: application/json
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "lfm3",
+    "model": "qwen3-1.7b",
     "messages": [
       {"role": "user", "content": "Hello!"}
     ],
@@ -201,8 +200,12 @@ Logging level is controlled via the `RUST_LOG` environment variable:
 ```powershell
 # Windows PowerShell
 $env:RUST_LOG = "debug"
-.\target\release\lfm3-server.exe --model-dir ./model
+.\target\release\qwen3-server.exe --model-dir ./model
 
 # Bash
-RUST_LOG=debug ./target/release/lfm3-server --model-dir ./model
+RUST_LOG=debug ./target/release/qwen3-server --model-dir ./model
 ```
+
+
+
+

@@ -1,11 +1,11 @@
 [package]
-name = "lfm3-server"
+name = "qwen3-server"
 version = "0.1.0"
 edition = "2021"
-description = "OpenAI-compatible API server for the LFM3-1.7B model using ONNX Runtime"
+description = "OpenAI-compatible API server for the Qwen3-1.7B model using ONNX Runtime"
 
 [[bin]]
-name = "lfm3-server"
+name = "qwen3-server"
 path = "src/main.rs"
 
 [dependencies]
@@ -41,3 +41,4 @@ anyhow = "1"
 
 # Misc
 rand = "0.8"
+

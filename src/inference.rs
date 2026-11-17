@@ -1,11 +1,8 @@
-//! Inference engine — loads the LFM3 ONNX model and runs autoregressive generation.
+//! Inference engine — loads the Qwen3 ONNX model and runs autoregressive generation.
 //!
 //! Architecture notes
 //! ------------------
-//! LFM3 is a tri-hybrid model (gated short-conv + sliding-window attention + global attention).
-//! The ONNX export from `onnx-community/LFM3-1.7B-ONNX` bundles both the KV-attention caches
-//! (`past_key_values.N.key` / `past_key_values.N.value`) and the convolution states
-//! (`past_conv.N` or `past_conv_states.N`) as dynamic inputs / outputs so the generation loop can be run
+//! The ONNX export exposes KV cache inputs and outputs so generation can run
 //! entirely inside ORT without touching Python.
 //!
 //! The number of cache layers is discovered dynamically by inspecting the session's input metadata
@@ -40,7 +37,7 @@ impl Engine {
     /// model_dir/
     ///   tokenizer.json
     ///   onnx/
-    ///     model_q4.onnx          (+ model_q4.onnx_data alongside)
+    ///     model_q4.onnx
     /// ```
     pub fn load(model_dir: &Path, default_max_tokens: usize) -> anyhow::Result<Self> {
         let tokenizer_path = model_dir.join("tokenizer.json");
@@ -51,11 +48,11 @@ impl Engine {
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer from {}: {e}", tokenizer_path.display()))?;
         let eos_token_id = tokenizer
             .token_to_id("<|im_end|>")
-            .context("Tokenizer does not define the LFM3 end-of-message token <|im_end|>")?;
+            .context("Tokenizer does not define the Qwen3 end-of-message token <|im_end|>")?;
 
         // --- ONNX Runtime -----------------------------------------------
         let env = ort::init()
-            .with_name("lfm3")
+            .with_name("qwen3")
             .build()
             .context("Failed to initialise ONNX Runtime environment")?;
 
@@ -189,7 +186,7 @@ impl EngineInner {
         messages: &[crate::server::ChatMessage],
         max_tokens: usize,
     ) -> anyhow::Result<GenerateResult> {
-        // 1. Build prompt text using LFM3 / LLaMA-3 chat template
+        // 1. Build prompt text using the Qwen3 chat template
         let prompt = build_chat_prompt(messages);
         debug!(prompt_len = prompt.len(), "Built chat prompt");
 
@@ -468,29 +465,36 @@ fn extract_f32_array(
 // Chat prompt builder
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Build a prompt string using the LFM3 chat template.
+/// Build a prompt string using the Qwen3 chat template.
 fn build_chat_prompt(messages: &[crate::server::ChatMessage]) -> String {
-    let mut prompt = String::from("<|startoftext|>");
+    let mut prompt = String::new();
     let mut remaining = messages;
 
     // The model's template renders a leading system message before the rest.
     if let Some((system, tail)) = messages.split_first().filter(|(msg, _)| msg.role == "system") {
         prompt.push_str(&format!(
-            "<|im_start|>system\n{}<|im_end|>\n",
+            "<|im_start|>system\n<|im_sep|>{}<|im_end|>",
             system.content.trim()
         ));
         remaining = tail;
     }
 
     for msg in remaining {
+        let content = if msg.role == "user" {
+            format!("{}\n/no_think", msg.content.trim())
+        } else {
+            msg.content.trim().to_string()
+        };
         prompt.push_str(&format!(
-            "<|im_start|>{}\n{}<|im_end|>\n",
+            "<|im_start|>{}\n<|im_sep|>{}<|im_end|>",
             msg.role,
-            msg.content.trim()
+            content
         ));
     }
 
-    // Disable the model's thinking section so generation starts with the regular response.
-    prompt.push_str("<|im_start|>assistant\n<think></think>");
+    prompt.push_str("<|im_start|>assistant\n<|im_sep|>");
     prompt
 }
+
+
+

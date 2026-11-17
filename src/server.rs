@@ -83,14 +83,14 @@ pub async fn run(host: String, port: u16, engine: Engine) -> anyhow::Result<()> 
 // ─────────────────────────────────────────────────────────────────────────────
 
 async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok", "model": "lfm3" }))
+    Json(json!({ "status": "ok", "model": "qwen3-1.7b" }))
 }
 
 async fn list_models() -> Json<Value> {
     Json(json!({
         "object": "list",
         "data": [{
-            "id": "lfm3",
+            "id": "qwen3-1.7b",
             "object": "model",
             "created": 0,
             "owned_by": "local"
@@ -105,8 +105,8 @@ async fn chat_completions(
 ) -> Response {
     // Validate model field
     if let Some(ref model) = request.model {
-        if model != "lfm3" && model != "onnx-community/LFM3-1.7B-ONNX" {
-            return api_error(StatusCode::NOT_FOUND, "This server only provides the 'lfm3' model.");
+        if model != "qwen3-1.7b" && model != "onnx-community/Qwen3-1.7B-ONNX" {
+            return api_error(StatusCode::NOT_FOUND, "This server only provides the 'qwen3-1.7b' model.");
         }
     }
 
@@ -161,7 +161,7 @@ async fn chat_completions(
                 "id": id,
                 "object": "chat.completion",
                 "created": created,
-                "model": "lfm3",
+                "model": "qwen3-1.7b",
                 "choices": [{
                     "index": 0,
                     "message": {
@@ -215,3 +215,4 @@ fn unix_secs() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
+

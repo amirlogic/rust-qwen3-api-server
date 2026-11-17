@@ -5,24 +5,24 @@ use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
 
-/// LFM3-1.7B ONNX API Server — OpenAI-compatible chat completions endpoint
+/// Qwen3-1.7B ONNX API Server — OpenAI-compatible chat completions endpoint
 #[derive(Parser, Debug)]
-#[command(name = "lfm3-server", version, about)]
+#[command(name = "qwen3-server", version, about)]
 struct Args {
     /// Port to listen on
-    #[arg(short, long, env = "LFM3_PORT", default_value = "8080")]
+    #[arg(short, long, env = "QWEN3_PORT", default_value = "8080")]
     port: u16,
 
     /// Host address to bind
-    #[arg(long, env = "LFM3_HOST", default_value = "127.0.0.1")]
+    #[arg(long, env = "QWEN3_HOST", default_value = "127.0.0.1")]
     host: String,
 
     /// Path to the model directory (must contain config.json, tokenizer.json, onnx/model_q4.onnx, etc.)
-    #[arg(short, long, env = "LFM3_MODEL_DIR")]
+    #[arg(short, long, env = "QWEN3_MODEL_DIR")]
     model_dir: std::path::PathBuf,
 
     /// Maximum number of new tokens to generate (default: 512)
-    #[arg(long, env = "LFM3_MAX_TOKENS", default_value = "512")]
+    #[arg(long, env = "QWEN3_MAX_TOKENS", default_value = "512")]
     max_tokens: usize,
 }
 
@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
         host = %args.host,
         port = args.port,
         model_dir = %args.model_dir.display(),
-        "Starting LFM3 API server"
+        "Starting Qwen3 API server"
     );
 
     // Load model and tokenizer (blocking — happens before the server accepts connections)
