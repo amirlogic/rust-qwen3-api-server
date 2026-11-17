@@ -147,7 +147,13 @@ async fn chat_completions(
     // Run inference on a blocking thread so we don't stall the async runtime
     let engine = state.engine.clone();
     let messages = request.messages.clone();
+    let inference_started = std::time::Instant::now();
     let result = tokio::task::spawn_blocking(move || engine.generate(&messages, max_tokens)).await;
+    info!(
+        id = %id,
+        elapsed_ms = inference_started.elapsed().as_millis() as u64,
+        "Inference task returned; building HTTP response"
+    );
 
     match result {
         Ok(Ok(gen)) => {
@@ -157,7 +163,7 @@ async fn chat_completions(
                 completion_tokens = gen.completion_tokens,
                 "Inference complete"
             );
-            Json(json!({
+            let payload = json!({
                 "id": id,
                 "object": "chat.completion",
                 "created": created,
@@ -175,8 +181,14 @@ async fn chat_completions(
                     "completion_tokens": gen.completion_tokens,
                     "total_tokens": gen.prompt_tokens + gen.completion_tokens
                 }
-            }))
-            .into_response()
+            });
+            info!(
+                id = %id,
+                response_chars = payload["choices"][0]["message"]["content"]
+                    .as_str().map(str::len).unwrap_or(0),
+                "Returning chat completion JSON"
+            );
+            Json(payload).into_response()
         }
         Ok(Err(e)) => {
             // Include anyhow's source chain so ONNX Runtime input/shape/type

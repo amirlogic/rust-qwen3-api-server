@@ -69,6 +69,11 @@ impl Engine {
             has_position_ids = cache_layout.has_position_ids,
             "Cache layout discovered"
         );
+        debug!(
+            inputs = ?session.inputs().iter().map(|i| i.name()).collect::<Vec<_>>(),
+            outputs = ?session.outputs().iter().map(|o| o.name()).collect::<Vec<_>>(),
+            "ONNX session interface"
+        );
 
         Ok(Self(Arc::new(Mutex::new(EngineInner {
             session,
@@ -188,7 +193,7 @@ impl EngineInner {
     ) -> anyhow::Result<GenerateResult> {
         // 1. Build prompt text using the Qwen3 chat template
         let prompt = build_chat_prompt(messages);
-        debug!(prompt_len = prompt.len(), "Built chat prompt");
+        debug!(prompt_len = prompt.len(), prompt = %prompt, "Built chat prompt");
 
         // 2. Tokenise
         let encoding = self
@@ -203,6 +208,7 @@ impl EngineInner {
         }
 
         debug!(prompt_tokens, "Prompt tokenised");
+        debug!(prompt_token_ids = ?prompt_ids, "Prompt token IDs");
 
         // 3. Autoregressive generation
         let mut all_ids = prompt_ids.clone();
@@ -303,10 +309,17 @@ impl EngineInner {
             }
 
             // ── Run the session ─────────────────────────────────────────────
+            let inference_started = std::time::Instant::now();
+            info!(step, seq_len, total_len, "Running ONNX inference step");
             let outputs = self
                 .session
                 .run(inputs)
                 .context("ONNX Runtime inference failed")?;
+            info!(
+                step,
+                elapsed_ms = inference_started.elapsed().as_millis() as u64,
+                "ONNX inference step completed"
+            );
 
             // ── Extract logits — shape [1, seq_len, vocab_size] ────────────
             let logits_val = outputs
@@ -316,6 +329,19 @@ impl EngineInner {
             let logits_view = logits_val
                 .try_extract_array::<f32>()
                 .context("Failed to extract logits as f32 array")?;
+
+            if step == 0 {
+                let (min_logit, max_logit) = logits_view.iter().fold(
+                    (f32::INFINITY, f32::NEG_INFINITY),
+                    |(min, max), &value| (min.min(value), max.max(value)),
+                );
+                debug!(
+                    logits_shape = ?logits_view.shape(),
+                    min_logit,
+                    max_logit,
+                    "First-step logits diagnostics"
+                );
+            }
 
             let last_pos = logits_view.shape()[1] - 1;
             let last_logits = logits_view.index_axis(Axis(1), last_pos);
@@ -329,26 +355,52 @@ impl EngineInner {
                 .unwrap_or(0);
 
             debug!(step, next_token, "Generated token");
+            if step == 0 || (step + 1) % 8 == 0 {
+                info!(step, next_token, "Generation progress");
+            }
 
             all_ids.push(next_token);
             generated.push(next_token);
 
-            // Update KV / conv cache from outputs
-            kv_cache = Some(extract_kv_cache(&outputs, &self.cache_layout)?);
-
-            // Stop on EOS
+            // No next inference step will consume the cache after EOS, so stop
+            // before copying all layer caches out of the ONNX result.
             if next_token as u32 == self.eos_token_id {
-                debug!("EOS token reached at step {step}");
+                info!(step, generated_tokens = generated.len(), "EOS token reached");
                 break;
             }
+
+            // Update KV / conv cache from outputs
+            kv_cache = Some(extract_kv_cache(&outputs, &self.cache_layout)?);
         }
 
         // 4. Decode generated tokens
         let gen_u32: Vec<u32> = generated.iter().map(|&t| t as u32).collect();
+        let decoded_with_special_tokens = self
+            .tokenizer
+            .decode(&gen_u32, false)
+            .map_err(|e| anyhow::anyhow!("Decoding generated tokens failed: {e}"))?;
         let text = self
             .tokenizer
             .decode(&gen_u32, true)
             .map_err(|e| anyhow::anyhow!("Decoding failed: {e}"))?;
+        info!(
+            generated_token_ids = ?generated,
+            decoded_with_special_tokens = %decoded_with_special_tokens,
+            decoded_text = %text,
+            "Decoded model output"
+        );
+        debug!(
+            completion_tokens = generated.len(),
+            generated_token_ids = ?generated,
+            decoded_text = %text,
+            "Generation diagnostics"
+        );
+        info!(
+            prompt_tokens,
+            completion_tokens = generated.len(),
+            response_chars = text.chars().count(),
+            "Generation decoded"
+        );
 
         Ok(GenerateResult {
             text,
@@ -473,26 +525,22 @@ fn build_chat_prompt(messages: &[crate::server::ChatMessage]) -> String {
     // The model's template renders a leading system message before the rest.
     if let Some((system, tail)) = messages.split_first().filter(|(msg, _)| msg.role == "system") {
         prompt.push_str(&format!(
-            "<|im_start|>system\n<|im_sep|>{}<|im_end|>",
+            "<|im_start|>system\n{}<|im_end|>\n",
             system.content.trim()
         ));
         remaining = tail;
     }
 
     for msg in remaining {
-        let content = if msg.role == "user" {
-            format!("{}\n/no_think", msg.content.trim())
-        } else {
-            msg.content.trim().to_string()
-        };
         prompt.push_str(&format!(
-            "<|im_start|>{}\n<|im_sep|>{}<|im_end|>",
+            "<|im_start|>{}\n{}<|im_end|>\n",
             msg.role,
-            content
+            msg.content.trim()
         ));
     }
 
-    prompt.push_str("<|im_start|>assistant\n<|im_sep|>");
+    // Match this checkpoint's template with thinking disabled.
+    prompt.push_str("<|im_start|>assistant\n<think>\n\n</think>\n\n");
     prompt
 }
 
